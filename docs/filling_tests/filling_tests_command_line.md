@@ -107,6 +107,33 @@ This flag automatically performs a two-phase execution:
     uv run fill --generate-all-formats --output=fixtures.tar.gz tests/shanghai/
     ```
 
+## The Sync Block
+
+By default the filler adds one framework-built empty block to every blockchain test's chain **in `blockchain_test_engine_x` fixtures only**; every other fixture format's chains are exactly what the test defines. `--no-sync-block` disables it:
+
+```console
+uv run fill --no-sync-block --generate-all-formats tests/cancun/
+```
+
+A consumer that makes the client download and execute a test's own blocks over devp2p needs the client to actually sync, and two facts about the protocol decide what such a consumer can guarantee: a client only starts a sync when the announced head's parent is unknown to it, and only blocks *below* the head must travel devp2p - the head's payload is always delivered through `engine_newPayload`, and whether a client also re-fetches it from a peer is an implementation choice. The sync block's placement is therefore resolved per test from the chain's own structure:
+
+| Chain class | Sequence | Placement | Fixture representation |
+| ----------- | -------- | --------- | ---------------------- |
+| Fully valid (single or multi-block) | `G → T₁…Tₙ → S*` | **appended** above the head | out-of-chain, the fixture's `syncPayload` field |
+| Single expected-invalid or Engine API-refused block | `G → S → T₁*` | **prepended** below it | in-chain, `engineNewPayloads[0]` tagged `"phase": "sync"` |
+| Invalid multi-block | `G → T₁…Tₙᵢ*` | none | - |
+
+(`*` marks the block a sync-based consumer announces; `ᵢ` the intentionally invalid block.)
+
+For a valid chain the appended block makes every one of the test's own blocks an ancestor of the announced head, which a syncing client must fetch and execute through its sync pipeline - the test's content is wire-guaranteed by chain structure, on any client. The fixture's payload list, `lastblockhash` and post state keep describing exactly the chain the test author wrote; the trailer rides out-of-chain in `syncPayload`, the same representation [`consume sync`](../running_tests/running.md#sync)'s fixture format has always used, and consumers that replay payloads through the Engine API ignore it. For a single invalid block nothing can be built on top, so the extra block lands below, giving the sync a reason to start before the client judges the announced head; there it is load-bearing ancestry, so it lives in-chain and every consumer replays it. An invalid multi-block chain needs no help: its valid ancestors already travel the wire.
+
+The sync block is a real block, built through the same machinery as every other block, and carries a per-test digest in its `extra_data` so every announced head is a block the client has never seen, even across tests sharing a pre-allocation group. Prepend-class chains get their genesis fee fields wound one progression step up to cancel the step the extra block introduces, so the test's own block executes in the fee environment its author specified; append-class chains need no compensation at all. Timestamps are never shifted: a prepend-class test pinning a timestamp the extra block cannot clear fails the fill instead of producing a non-monotonic chain.
+
+!!! note "Only engine_x fixtures are affected"
+    Prepending shifts the invalid singleton's block number and hash, so engine_x fixtures filled with and without the option are not comparable. The other blockchain formats never carry the extra block: they share a positional `t8n` output cache and must build byte-identical chains, while engine_x fixtures opt out of that cache and pay no extra `t8n` work for the divergence.
+
+Spec types the extra block would distort opt out and are filled without it (benchmark tests), so a combined fill needs no extra options. Tests that cannot take their class's placement are marked in the tree and fill without the extra block instead of being skipped - no test leaves the fixture release; sync-based consumers skip chains that cannot sync at consume time. See [`absolute_block_position`](../writing_tests/test_markers.md#pytestmarkabsolute_block_position) and its sibling markers.
+
 ## Debugging the `t8n` Command
 
 The `--evm-dump-dir` flag can be used to dump the inputs and outputs of every call made to the `t8n` command for debugging purposes, see [Debugging Transition Tools](./debugging_t8n_tools.md).

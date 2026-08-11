@@ -371,6 +371,36 @@ Examples of this include:
 - Contracts having zero-nonce
 - Deploying a contract to a hard-coded address
 
+### `@pytest.mark.absolute_block_position`
+
+This marker is used to mark tests whose logic or expectations depend on absolute block numbers or block hashes, e.g. `BLOCKHASH` lookups with static expectations, storage keyed by `NUMBER`, or EIP-2935 history contents.
+
+An invalid singleton so marked fills without the [prepended sync block](../filling_tests/filling_tests_command_line.md#the-sync-block): the prepended block shifts every block position, and the expectations are derived from the position rather than merely equal to it, so no fill transformation can preserve what the test verifies. The marker is irrelevant to valid chains - their sync block is appended above the head and shifts nothing - and only affects `blockchain_test_engine_x` fixtures (the only format that carries the extra block); the test itself always fills.
+
+### `@pytest.mark.pre_state_affects_empty_block`
+
+This marker is used to mark tests whose pre-state or genesis environment changes what *any* block executes, for example a deliberately broken system contract that every post-Prague block calls, one-shot pre-state that an extra block would consume, or a genesis gas limit too small for a minimal block's own system work.
+
+An invalid singleton so marked fills without the prepended sync block: the extra block would either fail on that setup or consume its one-shot behavior before the test's own block runs.
+
+### `@pytest.mark.no_empty_block_fee_preimage`
+
+This marker is used to mark tests pinning a fee value that no parent value decays to across an empty block, e.g. a small nonzero excess blob gas while EIP-7918's reserve price is active.
+
+An invalid singleton so marked fills without the prepended sync block: no genesis compensation preserves its fee environment, so the fill would otherwise refuse it loudly. Valid chains never need this marker - their genesis is never compensated.
+
+### `@pytest.mark.post_state_affects_sync_block`
+
+This marker is used to mark tests whose *final* state breaks the empty block the filler would append above their chain, for example a test that ends with a sabotaged system contract that every subsequent block calls, or with one-shot state the extra block would consume.
+
+A valid chain so marked fills as exactly the author's chain, without the appended sync block (`syncPayload` is absent from its fixture). This is the mirror image of `pre_state_affects_empty_block` on the other side of the chain; it is irrelevant to invalid singletons, whose prepended block never sees the test's post-state.
+
+### `@pytest.mark.no_sync_block_timestamp_headroom`
+
+This marker is used to mark tests whose head pins a timestamp at or next to the uint64 ceiling (`2**64 - 1`), for example the EIP-4788 beacon-root tests that exercise exactly that boundary. The appended sync block takes its parent's timestamp plus the default increment, so above such a head its timestamp would not fit uint64 and no client could parse the fixture's `syncPayload`.
+
+A valid chain so marked fills as exactly the author's chain, without the appended sync block; the fill refuses loudly (naming this marker) when an unmarked test hits the boundary. Timestamps are semantic and are never clamped or shifted, on either side of the chain. The marker is irrelevant to invalid singletons, whose prepended block sits below the chain.
+
 ### `@pytest.mark.skip()`
 
 This marker can be used to skip a test.
