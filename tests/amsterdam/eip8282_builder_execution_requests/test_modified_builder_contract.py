@@ -198,6 +198,12 @@ def test_extra_builder_exits(
     )
 
 
+# Every post-Amsterdam block calls the (deliberately broken or
+# gas-hungry one-shot) builder contracts, so the generated error modes
+# are invalid singletons on whose pre-state the prepended sync block
+# cannot build; the passing params are valid chains and keep their
+# appended trailer.
+@pytest.mark.pre_state_affects_empty_block
 @pytest.mark.parametrize(
     "system_contract",
     [
