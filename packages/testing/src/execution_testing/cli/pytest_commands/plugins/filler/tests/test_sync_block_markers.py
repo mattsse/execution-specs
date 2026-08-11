@@ -133,6 +133,7 @@ def engine_x_fixtures(output: Path) -> Dict[str, Dict[str, Any]]:
     "marker",
     [
         "absolute_block_position",
+        "pre_state_affects_empty_block",
     ],
 )
 def test_marked_test_fills_without_the_sync_block(

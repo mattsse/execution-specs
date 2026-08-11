@@ -115,6 +115,7 @@ timestamp of its own (see ``Block.set_environment``).
 PREPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS: FrozenSet[str] = frozenset(
     {
         "absolute_block_position",
+        "pre_state_affects_empty_block",
     }
 )
 """
