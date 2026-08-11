@@ -280,6 +280,15 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "no_sync_block_timestamp_headroom: Marks a test whose head pins a "
+        "timestamp at or next to the uint64 ceiling (2**64 - 1), leaving "
+        "no room for the sync block the filler would append above its "
+        "chain - the extra block's timestamp would not fit uint64 and no "
+        "client could parse it; a valid chain so marked fills without the "
+        "appended sync block, as exactly the author's chain.",
+    )
+    config.addinivalue_line(
+        "markers",
         "fixture_format_id: ID used to describe the fixture format.",
     )
     config.addinivalue_line(

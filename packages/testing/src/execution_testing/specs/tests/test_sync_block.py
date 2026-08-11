@@ -582,3 +582,49 @@ def test_append_ineligibility_marker_is_irrelevant_to_prepend() -> None:
         ),
     )
     assert test.sync_block_policy() is SyncBlockPolicy.PREPEND
+
+
+def test_timestamp_headroom_marker_falls_back_bare() -> None:
+    """
+    A marked maximal-timestamp valid chain fills as exactly the
+    author's chain: the marker vetoes the append, and the test is
+    never skipped.
+    """
+    test = BlockchainTest(
+        fork=Cancun,
+        pre=Alloc(),
+        post=Alloc(),
+        blocks=[Block(timestamp=2**64 - 1)],
+        sync_block=True,
+        sync_block_salt="test",
+        sync_block_ineligibilities=frozenset(
+            {"no_sync_block_timestamp_headroom"}
+        ),
+    )
+    assert test.sync_block_policy() is SyncBlockPolicy.NONE
+    assert test.blocks_to_build() is test.blocks
+
+
+def test_timestamp_headroom_marker_is_irrelevant_to_prepend() -> None:
+    """
+    The headroom marker on an invalid singleton changes nothing: the
+    prepended sync block sits below the chain, where the uint64
+    ceiling above the head is not its problem.
+    """
+    test = BlockchainTest(
+        fork=Cancun,
+        pre=Alloc(),
+        post=Alloc(),
+        blocks=[
+            Block(
+                timestamp=2**64 - 1,
+                exception=BlockException.INCORRECT_BLOCK_FORMAT,
+            )
+        ],
+        sync_block=True,
+        sync_block_salt="test",
+        sync_block_ineligibilities=frozenset(
+            {"no_sync_block_timestamp_headroom"}
+        ),
+    )
+    assert test.sync_block_policy() is SyncBlockPolicy.PREPEND

@@ -192,14 +192,14 @@ append_marked_test_module = textwrap.dedent(
     from execution_testing import Block, Transaction
 
 
-    @pytest.mark.post_state_affects_sync_block
+    @pytest.mark.{marker}
     def test_marked_valid(blockchain_test, pre) -> None:
         tx = Transaction(
             to=0,
             gas_limit=21_000,
             sender=pre.fund_eoa(),
         )
-        blockchain_test(pre=pre, post={}, blocks=[Block(txs=[tx])])
+        blockchain_test(pre=pre, post={{}}, blocks=[Block(txs=[tx])])
 
 
     def test_unmarked_valid(blockchain_test, pre) -> None:
@@ -208,20 +208,29 @@ append_marked_test_module = textwrap.dedent(
             gas_limit=21_000,
             sender=pre.fund_eoa(),
         )
-        blockchain_test(pre=pre, post={}, blocks=[Block(txs=[tx])])
+        blockchain_test(pre=pre, post={{}}, blocks=[Block(txs=[tx])])
     """
 )
 
 
-def test_append_marked_test_fills_without_the_trailer(pytester: Any) -> None:
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "post_state_affects_sync_block",
+        "no_sync_block_timestamp_headroom",
+    ],
+)
+def test_append_marked_test_fills_without_the_trailer(
+    pytester: Any, marker: str
+) -> None:
     """
-    The append-class marker must cost exactly its own test the
+    Each append-class marker must cost exactly its own test the
     trailer: the marked valid test fills as the author's bare chain
     while the unmarked one in the same module keeps its
     ``syncPayload``.
     """
     test_module = make_test_module(pytester, marker="unused")
-    test_module.write_text(append_marked_test_module)
+    test_module.write_text(append_marked_test_module.format(marker=marker))
     output = fill(pytester, test_module)
 
     fixtures = engine_x_fixtures(output)

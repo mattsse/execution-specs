@@ -130,6 +130,7 @@ to the appended sync block, which changes nothing below itself.
 
 APPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS: FrozenSet[str] = frozenset(
     {
+        "no_sync_block_timestamp_headroom",
         "post_state_affects_sync_block",
     }
 )
@@ -137,9 +138,11 @@ APPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS: FrozenSet[str] = frozenset(
 Markers declaring a test permanently ineligible for the *appended*
 sync block: its final state breaks the extra block t8n would build on
 top of it (e.g. a sabotaged system contract every block calls, or
-one-shot state the block would consume). A marked test fills as
-exactly the author's chain - fallback bare, never skip. Irrelevant to
-the prepended sync block, which never sees the test's post-state.
+one-shot state the block would consume), or its head pins a timestamp
+so close to the uint64 ceiling that no block fits above it. A marked
+test fills as exactly the author's chain - fallback bare, never skip.
+Irrelevant to the prepended sync block, which sits below everything
+the markers describe.
 """
 
 
@@ -1609,7 +1612,10 @@ class BlockchainTest(BaseTest):
                 f"block: {head_timestamp} + "
                 f"{DEFAULT_TIMESTAMP_INCREMENT} exceeds 2**64 - 1, "
                 "and no client can parse a block whose timestamp "
-                "does not fit uint64."
+                "does not fit uint64. If the maximal timestamp is the "
+                "test's purpose, the test is ineligible for the "
+                "appended sync block and belongs marked "
+                "`no_sync_block_timestamp_headroom`."
             )
 
     def make_fixture(
