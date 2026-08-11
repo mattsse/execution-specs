@@ -21,7 +21,17 @@ import time
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Generator, List, Self, Set, Type
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    FrozenSet,
+    Generator,
+    List,
+    Self,
+    Set,
+    Type,
+)
 
 import pytest
 import xdist
@@ -79,6 +89,9 @@ from execution_testing.forks import (
 )
 from execution_testing.specs import BaseTest
 from execution_testing.specs.base import FillResult, OpMode
+from execution_testing.specs.blockchain import (
+    PREPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS,
+)
 from execution_testing.test_types import EnvironmentDefaults
 from execution_testing.test_types.chain_config_types import (
     DEFAULT_CHAIN_ID,
@@ -106,6 +119,15 @@ from ..spec_version_checker.spec_version_checker import (
 
 if TYPE_CHECKING:
     from .pre_alloc import Alloc
+
+SYNC_BLOCK_INELIGIBILITY_MARKERS: FrozenSet[str] = (
+    PREPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS
+)
+"""
+All sync-block ineligibility markers the filler collects from a test
+node. Each vetoes one placement in the spec's policy resolution; the
+spec knows which marker belongs to which placement.
+"""
 
 # Fixture output dir for keyboard interrupt cleanup (set in pytest_configure).
 # Used by _merge_on_exit to merge partial JSONL files on Ctrl+C or SIGTERM.
@@ -1675,6 +1697,15 @@ def base_test_parametrizer(cls: Type[BaseTest]) -> Any:
                     and fixture_format.sync_block
                     and cls.supports_sync_block
                     and op_mode != OpMode.BENCHMARKING
+                )
+                # Each ineligibility marker vetoes one sync-block
+                # placement in the spec's policy resolution; a marked
+                # test fills without the extra block rather than being
+                # skipped, so no test ever leaves the fixture release.
+                kwargs["sync_block_ineligibilities"] = frozenset(
+                    marker
+                    for marker in SYNC_BLOCK_INELIGIBILITY_MARKERS
+                    if request.node.get_closest_marker(marker) is not None
                 )
                 # Salt with the test's own id, not with the raw node
                 # id: the fixture format and the xdist group suffix

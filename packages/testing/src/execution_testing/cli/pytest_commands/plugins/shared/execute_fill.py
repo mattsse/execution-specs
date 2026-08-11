@@ -242,6 +242,15 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "absolute_block_position: Marks a test whose logic or expectations "
+        "depend on absolute block numbers or block hashes; an invalid "
+        "singleton so marked fills without the prepended sync block, because "
+        "the extra block would shift every block position and silently "
+        "change what the test verifies. Irrelevant to appended sync blocks, "
+        "which shift nothing.",
+    )
+    config.addinivalue_line(
+        "markers",
         "fixture_format_id: ID used to describe the fixture format.",
     )
     config.addinivalue_line(

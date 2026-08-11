@@ -8,6 +8,7 @@ from typing import (
     Callable,
     ClassVar,
     Dict,
+    FrozenSet,
     Generator,
     List,
     Sequence,
@@ -109,6 +110,20 @@ DEFAULT_TIMESTAMP_INCREMENT = 12
 """
 Seconds between a block and its parent when the block does not pin a
 timestamp of its own (see ``Block.set_environment``).
+"""
+
+PREPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS: FrozenSet[str] = frozenset(
+    {
+        "absolute_block_position",
+    }
+)
+"""
+Markers declaring a test permanently ineligible for the *prepended*
+sync block, each naming the reason the transformation cannot preserve
+what the test verifies. A marked test is not skipped - it fills
+without the extra block (see
+``BaseTest.sync_block_ineligibilities``). The markers are irrelevant
+to the appended sync block, which changes nothing below itself.
 """
 
 
@@ -1418,6 +1433,11 @@ class BlockchainTest(BaseTest):
           error-code block keeps its own announcement for the same
           reason the singleton does; an empty chain has nothing to
           announce.
+
+        A test marked ineligible for its class's placement (see
+        ``BaseTest.sync_block_ineligibilities``) also resolves to
+        none: it fills with exactly its own chain instead of being
+        skipped, so no test ever leaves the fixture release.
         """
         if not self.sync_block or not self.blocks:
             return SyncBlockPolicy.NONE
@@ -1426,6 +1446,11 @@ class BlockchainTest(BaseTest):
         )
         invalid = any(block.exception is not None for block in self.blocks)
         if len(self.blocks) == 1 and (invalid or engine_refused):
+            if (
+                self.sync_block_ineligibilities
+                & PREPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS
+            ):
+                return SyncBlockPolicy.NONE
             return SyncBlockPolicy.PREPEND
         if not invalid and not engine_refused:
             return SyncBlockPolicy.APPEND

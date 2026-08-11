@@ -10,6 +10,7 @@ from typing import (
     Callable,
     ClassVar,
     Dict,
+    FrozenSet,
     Generator,
     List,
     Sequence,
@@ -140,6 +141,20 @@ class BaseTest(BaseModel):
     gas. Ignored by test specs that do not build a chain of blocks,
     and by stateful fixtures, whose chains continue a live client's
     own head instead of a genesis the framework builds.
+    """
+    sync_block_ineligibilities: FrozenSet[str] = frozenset()
+    """
+    Names of the sync-block ineligibility markers present on the test.
+
+    Each marker declares the test permanently incompatible with one
+    sync-block placement, and vetoes only that placement's resolution
+    (see ``BlockchainTest.sync_block_policy``): a marked test is not
+    skipped - it fills without the sync block, so no test ever leaves
+    the fixture release. Its chain is then only syncable if the test's
+    own blocks make it so; sync-based consumers skip the rest at
+    consume time, which is honest: a chain that cannot take the extra
+    block cannot trigger a devp2p sync no matter how it is filled.
+    Set by the filler from the markers on the pytest node.
     """
     sync_block_salt: str = ""
     """

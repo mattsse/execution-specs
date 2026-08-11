@@ -482,3 +482,63 @@ def test_state_test_conversion_unchanged_without_sync_block() -> None:
     env = blockchain_test.get_genesis_environment()
     assert env.base_fee_per_gas == 10 * 8 // 7
     assert env.excess_blob_gas == 0xE0000 + CANCUN_TARGET_BLOB_GAS
+
+
+def test_prepend_ineligibility_marker_falls_back_bare() -> None:
+    """
+    A marked invalid singleton fills with exactly its own chain: the
+    marker vetoes the prepend, and the test is never skipped.
+    """
+    test = BlockchainTest(
+        fork=Cancun,
+        pre=Alloc(),
+        post=Alloc(),
+        blocks=[INVALID],
+        sync_block=True,
+        sync_block_salt="test",
+        sync_block_ineligibilities=frozenset({"absolute_block_position"}),
+    )
+    assert test.sync_block_policy() is SyncBlockPolicy.NONE
+    assert test.blocks_to_build() is test.blocks
+
+
+def test_prepend_ineligibility_marker_is_irrelevant_to_append() -> None:
+    """
+    A prepend-class marker on a valid chain changes nothing: the
+    appended sync block shifts no position, so the chain keeps its
+    trailer.
+    """
+    test = BlockchainTest(
+        fork=Cancun,
+        pre=Alloc(),
+        post=Alloc(),
+        blocks=[VALID],
+        sync_block=True,
+        sync_block_salt="test",
+        sync_block_ineligibilities=frozenset({"absolute_block_position"}),
+    )
+    assert test.sync_block_policy() is SyncBlockPolicy.APPEND
+
+
+def test_prepend_ineligibility_restores_the_author_genesis() -> None:
+    """
+    The marker's veto must reach the genesis compensation: a marked
+    invalid singleton's pinned fee environment passes through
+    untouched, in both fill phases.
+    """
+    test = BlockchainTest(
+        fork=Cancun,
+        pre=Alloc(),
+        post=Alloc(),
+        blocks=[INVALID],
+        genesis_environment=Environment(
+            base_fee_per_gas=HexNumber(10),
+            excess_blob_gas=HexNumber(0x80000),
+        ),
+        sync_block=True,
+        sync_block_salt="test",
+        sync_block_ineligibilities=frozenset({"absolute_block_position"}),
+    )
+    env = test.get_genesis_environment()
+    assert env.base_fee_per_gas == 10
+    assert env.excess_blob_gas == 0x80000
