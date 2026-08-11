@@ -113,6 +113,50 @@ class BaseTest(BaseModel):
         # instead of each test having to set it
     )
     operation_mode: OpMode | None = None
+    sync_block: bool = False
+    """
+    Add one framework-built empty block to a blockchain test's chain
+    when filling for sync-based consumption.
+
+    A client only starts a devp2p sync when the announced head's
+    parent is unknown to it, and blocks below the head can only reach
+    the client over devp2p - there is no Engine API path for them. The
+    placement of the extra block therefore decides what the wire
+    guarantees, and is resolved per test from the chain's own
+    structure (see ``BlockchainTest.sync_block_policy``):
+
+    - a fully valid chain gets the block *appended* above its head,
+      making every one of the test's own blocks a wire-guaranteed
+      ancestor;
+    - a single expected-invalid (or Engine API-refused) block gets it
+      *prepended* between genesis and itself, giving the sync a reason
+      to start so the client can judge the announced head;
+    - every other chain is built exactly as the test defines it.
+
+    Set by the filler only when the fixture format being filled opts
+    in via ``BaseFixture.sync_block`` (currently
+    ``blockchain_test_engine_x``), the spec type's
+    ``supports_sync_block`` is true, and the session is not measuring
+    gas. Ignored by test specs that do not build a chain of blocks,
+    and by stateful fixtures, whose chains continue a live client's
+    own head instead of a genesis the framework builds.
+    """
+    sync_block_salt: str = ""
+    """
+    Value mixed into the sync block's ``extra_data`` so its hash is
+    unique to this test.
+
+    The tests of a pre-allocation group share a genesis and are served
+    to one reused client, and every announced head must be a block
+    that client has never seen, so each sync attempt is attributable
+    to its own test. A prepended block builds on the shared genesis
+    and would be identical across the group without the salt; an
+    appended block usually inherits uniqueness from its parent (the
+    test's own head), but two tests of a group whose chains are
+    byte-identical would share it. A per-test ``extra_data`` keeps the
+    block's state transition identical while making its hash unique.
+    The filler sets this to the pytest node id.
+    """
     gas_optimization_max_gas_limit: int | None = None
     expected_benchmark_gas_used: int | None = None
     skip_gas_used_validation: bool = False
@@ -121,6 +165,17 @@ class BaseTest(BaseModel):
     is_exception_test: bool = False
 
     # Class variables, to be set by subclasses
+    supports_sync_block: ClassVar[bool] = True
+    """
+    Whether the filler's ``--sync-block`` option applies to this spec
+    type.
+
+    Consensus test specs support it so sync-based consumers can
+    trigger a devp2p sync on their chains. Spec types whose
+    measurements the extra block would distort (benchmark tests) set
+    this to false and are filled without it even when the option is
+    given.
+    """
     spec_types: ClassVar[Dict[str, Type["BaseTest"]]] = {}
     supported_fixture_formats: ClassVar[
         Sequence[FixtureFormat | LabeledFixtureFormat]

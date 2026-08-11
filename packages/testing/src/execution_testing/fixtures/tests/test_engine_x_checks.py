@@ -49,11 +49,15 @@ def _write_fixture(
     fixture_dir: str,
     test_id: str,
     payloads: List[Dict[str, Any]],
+    sync_payload: Dict[str, Any] | None = None,
 ) -> None:
     """Write a single-fixture file into a format tree."""
     file = folder / fixture_dir / "prague" / "module" / "test_a.json"
     file.parent.mkdir(parents=True, exist_ok=True)
-    file.write_text(json.dumps({test_id: {"engineNewPayloads": payloads}}))
+    fixture: Dict[str, Any] = {"engineNewPayloads": payloads}
+    if sync_payload is not None:
+        fixture["syncPayload"] = sync_payload
+    file.write_text(json.dumps({test_id: fixture}))
 
 
 def test_identical_execution_passes(tmp_path: Path) -> None:
@@ -211,3 +215,185 @@ def test_no_matching_siblings_reports_skip_count(tmp_path: Path) -> None:
     assert result is not None
     assert result.compared == 0
     assert result.skipped == 1
+
+
+def _sync_payload() -> Dict[str, Any]:
+    """Build a framework sync block's newPayload entry."""
+    payload = _payload(gas_used="0x0", state_root="0x33", block_hash="0x44")
+    payload["params"][0]["transactions"] = []
+    payload["phase"] = "sync"
+    return payload
+
+
+def _shifted(
+    payload: Dict[str, Any], *, number: str, timestamp: str
+) -> Dict[str, Any]:
+    """Return a copy of `payload` at a shifted chain position."""
+    shifted = json.loads(json.dumps(payload))
+    shifted["params"][0]["blockNumber"] = number
+    shifted["params"][0]["timestamp"] = timestamp
+    return shifted
+
+
+def test_sync_payload_is_ignored(tmp_path: Path) -> None:
+    """
+    An Engine X fixture prepended with a sync-phase payload compares
+    clean against its unprepended sibling: the extra payload is
+    dropped and the block numbers and timestamps it shifts are
+    scrubbed.
+    """
+    base = _payload(gas_used="0x5208", state_root="0x01", block_hash="0x02")
+    _write_fixture(
+        tmp_path,
+        SIBLING_FIXTURES_DIR,
+        SIBLING_ID,
+        [_shifted(base, number="0x1", timestamp="0xc")],
+    )
+    _write_fixture(
+        tmp_path,
+        ENGINE_X_FIXTURES_DIR,
+        ENGINE_X_ID,
+        [_sync_payload(), _shifted(base, number="0x2", timestamp="0xd")],
+    )
+
+    result = verify_engine_x_execution(tmp_path)
+
+    assert result is not None
+    assert result.compared == 1
+
+
+def test_sync_payload_does_not_mask_drift(tmp_path: Path) -> None:
+    """A real execution difference still fails on a prepended fixture."""
+    _write_fixture(
+        tmp_path,
+        SIBLING_FIXTURES_DIR,
+        SIBLING_ID,
+        [_payload(gas_used="0x5208", state_root="0x01", block_hash="0x02")],
+    )
+    _write_fixture(
+        tmp_path,
+        ENGINE_X_FIXTURES_DIR,
+        ENGINE_X_ID,
+        [
+            _sync_payload(),
+            _payload(gas_used="0xbeef", state_root="0xaa", block_hash="0xbb"),
+        ],
+    )
+
+    with pytest.raises(EngineXExecutionDriftError) as exc_info:
+        verify_engine_x_execution(tmp_path)
+
+    assert "gasUsed" in str(exc_info.value)
+
+
+def test_appended_sync_payload_never_enters_the_comparison(
+    tmp_path: Path,
+) -> None:
+    """
+    An append-class fixture (out-of-chain ``syncPayload``) compares
+    its payload list against the sibling untouched: the appended block
+    shifts nothing, so nothing is dropped or scrubbed.
+    """
+    base = _payload(gas_used="0x5208", state_root="0x01", block_hash="0x02")
+    _write_fixture(
+        tmp_path,
+        SIBLING_FIXTURES_DIR,
+        SIBLING_ID,
+        [_shifted(base, number="0x1", timestamp="0xc")],
+    )
+    _write_fixture(
+        tmp_path,
+        ENGINE_X_FIXTURES_DIR,
+        ENGINE_X_ID,
+        [_shifted(base, number="0x1", timestamp="0xc")],
+        sync_payload=_sync_payload(),
+    )
+
+    result = verify_engine_x_execution(tmp_path)
+
+    assert result is not None
+    assert result.compared == 1
+
+
+def test_appended_sync_payload_keeps_full_strictness(tmp_path: Path) -> None:
+    """
+    An append-class fixture must not inherit the prepend class's
+    position scrubbing: a shifted block number is a real difference.
+    """
+    base = _payload(gas_used="0x5208", state_root="0x01", block_hash="0x02")
+    _write_fixture(
+        tmp_path,
+        SIBLING_FIXTURES_DIR,
+        SIBLING_ID,
+        [_shifted(base, number="0x1", timestamp="0xc")],
+    )
+    _write_fixture(
+        tmp_path,
+        ENGINE_X_FIXTURES_DIR,
+        ENGINE_X_ID,
+        [_shifted(base, number="0x2", timestamp="0xc")],
+        sync_payload=_sync_payload(),
+    )
+
+    with pytest.raises(EngineXExecutionDriftError) as exc_info:
+        verify_engine_x_execution(tmp_path)
+
+    assert "blockNumber" in str(exc_info.value)
+
+
+def test_prepended_fixture_scrubs_position_derived_content(
+    tmp_path: Path,
+) -> None:
+    """
+    A prepend-class fixture's shifted slot numbers and block access
+    list (whose EIP-2935 system write embeds the parent's hash) are
+    scrubbed alongside the block number and timestamp; a real
+    execution difference (gas used) still fails.
+    """
+    base = _payload(gas_used="0x5208", state_root="0x01", block_hash="0x02")
+    sibling = _shifted(base, number="0x1", timestamp="0xc")
+    sibling["params"][0]["slotNumber"] = "0x1"
+    sibling["params"][0]["blockAccessList"] = "0xaa"
+    engine_x = _shifted(base, number="0x2", timestamp="0xd")
+    engine_x["params"][0]["slotNumber"] = "0x2"
+    engine_x["params"][0]["blockAccessList"] = "0xbb"
+    _write_fixture(tmp_path, SIBLING_FIXTURES_DIR, SIBLING_ID, [sibling])
+    _write_fixture(
+        tmp_path,
+        ENGINE_X_FIXTURES_DIR,
+        ENGINE_X_ID,
+        [_sync_payload(), engine_x],
+    )
+
+    result = verify_engine_x_execution(tmp_path)
+
+    assert result is not None
+    assert result.compared == 1
+
+
+def test_appended_fixture_keeps_access_list_strictness(
+    tmp_path: Path,
+) -> None:
+    """
+    The append class must not inherit the prepend class's access-list
+    scrub: nothing shifts under an appended sync payload, so a block
+    access list difference is a real execution difference.
+    """
+    base = _payload(gas_used="0x5208", state_root="0x01", block_hash="0x02")
+    sibling = json.loads(json.dumps(base))
+    sibling["params"][0]["blockAccessList"] = "0xaa"
+    engine_x = json.loads(json.dumps(base))
+    engine_x["params"][0]["blockAccessList"] = "0xbb"
+    _write_fixture(tmp_path, SIBLING_FIXTURES_DIR, SIBLING_ID, [sibling])
+    _write_fixture(
+        tmp_path,
+        ENGINE_X_FIXTURES_DIR,
+        ENGINE_X_ID,
+        [engine_x],
+        sync_payload=_sync_payload(),
+    )
+
+    with pytest.raises(EngineXExecutionDriftError) as exc_info:
+        verify_engine_x_execution(tmp_path)
+
+    assert "blockAccessList" in str(exc_info.value)

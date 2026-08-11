@@ -922,6 +922,17 @@ class BlockchainEngineXFixture(BlockchainEngineFixtureCommon):
         FixtureFillingPhase.PRE_ALLOC_GENERATION,
     }
     transition_tool_cache_key: ClassVar[str] = ""
+    sync_block: ClassVar[bool] = True
+    """
+    Engine X fixtures may be consumed by sync-based simulators, which
+    can only trigger a devp2p sync on a chain whose announced head has
+    an unknown parent; the filler therefore adds one framework-built
+    empty block to this format's chains, placed per test by
+    ``BlockchainTest.sync_block_policy``. The format opts out of the
+    t8n output cache (its phase-2 chains build on a group genesis), so
+    its chains diverging from the other blockchain formats' costs no
+    extra t8n work.
+    """
 
     pre_hash: str
     """Hash of the pre-allocation group this test belongs to."""
@@ -936,6 +947,46 @@ class BlockchainEngineXFixture(BlockchainEngineFixtureCommon):
         ..., alias="engineNewPayloads"
     )
     """Engine API payloads for blockchain execution."""
+
+    sync_payload: FixtureEngineNewPayload | None = None
+    """
+    Framework-built empty payload appended above a fully valid chain's
+    head so that every payload in ``payloads`` is a wire-guaranteed
+    ancestor for sync-based consumers - the same out-of-chain
+    representation ``BlockchainEngineSyncFixture`` uses.
+
+    Kept out of ``payloads`` because it is scaffolding, not test
+    content: ``payloads``, ``last_block_hash`` and the post state all
+    keep describing exactly the chain the test author wrote, and
+    consumers that replay payloads through the Engine API need not
+    know the field exists (this format ignores unknown fields, so
+    older readers skip it wholesale). A sync-based consumer announces
+    it instead of ``payloads[-1]`` and treats the chain as complete
+    when the client accepts it as head.
+
+    ``None`` for chains that carry no appended block: a single
+    expected-invalid or Engine API-refused block gets a *prepended*
+    sync payload instead - in-chain as ``payloads[0]``, because there
+    the extra block is load-bearing ancestry every consumer must
+    replay - and every other ineligible chain is exactly the test's
+    own.
+    """
+
+    @property
+    def has_sync_payload(self) -> bool:
+        """
+        Return whether the fixture carries a framework-injected sync
+        payload, appended (``sync_payload``) or prepended (a leading
+        ``payloads`` entry tagged with the sync phase).
+
+        Derived from the payloads rather than stored, so the JSON
+        schema carries no separate switch.
+        """
+        if self.sync_payload is not None:
+            return True
+        return (
+            len(self.payloads) > 0 and self.payloads[0].phase == TestPhase.SYNC
+        )
 
 
 class BlockchainEngineStatefulFixture(BlockchainEngineFixtureCommon):

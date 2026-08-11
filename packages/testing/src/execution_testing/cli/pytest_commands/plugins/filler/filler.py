@@ -624,6 +624,38 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Fill tests using existing pre-allocation groups (phase 2 only).",
     )
     test_group.addoption(
+        "--sync-block",
+        action="store_true",
+        dest="sync_block",
+        default=False,
+        help=(
+            "Add one framework-built empty block to every blockchain "
+            "test's chain for fixture formats that opt in "
+            "(blockchain_test_engine_x), so that sync-based consumers "
+            "can trigger a devp2p sync. The block's placement is "
+            "resolved per test from the chain's structure: appended "
+            "above a fully valid chain's head (stored out-of-chain in "
+            "the fixture's `syncPayload` field, making every test "
+            "block a wire-guaranteed ancestor), prepended below a "
+            "single expected-invalid or Engine API-refused block "
+            "(stored in-chain as the first payload, tagged with the "
+            "`sync` phase), and omitted otherwise. Spec types that "
+            "opt out (benchmark tests) are filled without it. "
+            "Prepending shifts the invalid singleton's number and "
+            "hash, so those fixtures are not comparable with fixtures "
+            "filled without the option."
+        ),
+    )
+    test_group.addoption(
+        "--no-sync-block",
+        action="store_false",
+        dest="sync_block",
+        help=(
+            "Do not add sync blocks to any fixture format; every "
+            "chain is built exactly as the test defines it."
+        ),
+    )
+    test_group.addoption(
         "--generate-all-formats",
         action="store_true",
         dest="generate_all_formats",
@@ -1504,6 +1536,23 @@ def _strip_xdist_group_suffix(s: str) -> str:
     return s
 
 
+def _node_id_without_xdist_group(nodeid: str) -> str:
+    """
+    Return the node id without any xdist group suffix.
+
+    Under ``--dist=loadgroup`` the xdist worker appends ``@<group>`` to
+    every grouped item's node id, so anything derived from the raw id
+    depends on whether the fill ran in parallel. Every group name the
+    fill sets is a bare word, while a parametrized node id always ends
+    in ``]``, so a trailing ``@`` segment without one is a group name
+    and never part of the test's own id.
+    """
+    base, separator, suffix = nodeid.rpartition("@")
+    if separator and base and "]" not in suffix:
+        return base
+    return nodeid
+
+
 def node_to_test_info(node: pytest.Item) -> TestInfo:
     """Return test info of the current node item."""
     # Strip xdist group suffix (@groupname) that may be added during execution.
@@ -1614,6 +1663,28 @@ def base_test_parametrizer(cls: Type[BaseTest]) -> Any:
                 kwargs["fork"] = fork
                 op_mode: OpMode = request.config.op_mode  # type: ignore
                 kwargs["operation_mode"] = op_mode
+                # The sync block only applies to fixture formats that
+                # opt in (sync-based consumers need it); it is further
+                # withheld from spec types that measure per-block and
+                # from any session that is measuring. Where the block
+                # lands in an eligible test's chain - appended,
+                # prepended, or not at all - is resolved by the spec
+                # itself from the chain's structure.
+                kwargs["sync_block"] = (
+                    request.config.getoption("sync_block", False)
+                    and fixture_format.sync_block
+                    and cls.supports_sync_block
+                    and op_mode != OpMode.BENCHMARKING
+                )
+                # Salt with the test's own id, not with the raw node
+                # id: the fixture format and the xdist group suffix
+                # both ride along in the latter, and every format of
+                # one test must build the same chain (they share a
+                # t8n output cache) whether or not the fill ran in
+                # parallel.
+                kwargs["sync_block_salt"] = _node_id_without_xdist_group(
+                    strip_fixture_format_from_node(request.node)
+                )
                 kwargs["is_tx_gas_heavy_test"] = is_tx_gas_heavy_test
                 kwargs["is_exception_test"] = is_exception_test
                 if (

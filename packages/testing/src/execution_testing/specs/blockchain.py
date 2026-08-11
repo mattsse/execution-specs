@@ -1,5 +1,7 @@
 """Ethereum blockchain test spec definition and filler."""
 
+from enum import Enum
+from hashlib import sha256
 from pprint import pprint
 from typing import (
     Any,
@@ -102,6 +104,50 @@ from execution_testing.test_types.chain_config_types import ChainConfigDefaults
 from .base import BaseTest, FillResult, OpMode, verify_result
 from .debugging import print_traces
 from .helpers import verify_block, verify_transactions
+
+DEFAULT_TIMESTAMP_INCREMENT = 12
+"""
+Seconds between a block and its parent when the block does not pin a
+timestamp of its own (see ``Block.set_environment``).
+"""
+
+
+class SyncBlockPolicy(Enum):
+    """
+    Placement of the framework-built empty block that makes a chain
+    devp2p-syncable, resolved per test from the chain's own structure
+    (see ``BlockchainTest.sync_block_policy``).
+
+    A client only starts a sync when the announced head's parent is
+    unknown to it, and only blocks *below* the head are guaranteed to
+    travel devp2p - the head's payload is always announced through the
+    Engine API, and whether a client also re-fetches it from a peer is
+    an implementation choice. The placement therefore decides which
+    blocks the wire guarantees.
+    """
+
+    NONE = "none"
+    """
+    The chain is built exactly as the test defines it: it is either
+    already syncable (an invalid multi-block chain judges its head
+    after the valid ancestors arrive), cannot take an extra block in
+    either position, or the sync-block option is off.
+    """
+    PREPEND = "prepend"
+    """
+    One empty block between genesis and a single expected-invalid (or
+    Engine API-refused) block: nothing can be built on that block, so
+    the extra block below it is the only way to give the sync a reason
+    to start before the client judges the announced head.
+    """
+    APPEND = "append"
+    """
+    One empty block above a fully valid chain's head: the appended
+    block becomes the announced head and every one of the test's own
+    blocks becomes an ancestor, which a syncing client must fetch and
+    execute through its sync pipeline - the test's content is
+    wire-guaranteed by chain structure, on any client.
+    """
 
 
 def environment_from_parent_header(parent: "FixtureHeader") -> "Environment":
@@ -442,7 +488,7 @@ class Block(Header):
         else:
             assert env.parent_timestamp is not None
             new_env_values["timestamp"] = int(
-                Number(env.parent_timestamp) + 12
+                Number(env.parent_timestamp) + DEFAULT_TIMESTAMP_INCREMENT
             )
 
         return env.copy(**new_env_values)
@@ -577,8 +623,20 @@ class BuiltBlock(CamelModel):
             )
         return None
 
-    def get_fixture_engine_new_payload(self) -> FixtureEngineNewPayload:
-        """Get a FixtureEngineNewPayload from the built block."""
+    def get_fixture_engine_new_payload(
+        self, phase: TestPhase | None = None
+    ) -> FixtureEngineNewPayload:
+        """
+        Get a FixtureEngineNewPayload from the built block.
+
+        ``phase`` overrides the phase auto-derived from the block's
+        transactions; the filler passes ``TestPhase.SYNC`` for the
+        empty sync block it builds itself, which carries no
+        transactions to derive a phase from.
+        """
+        kwargs: Dict[str, Any] = {}
+        if phase is not None:
+            kwargs["phase"] = phase
         return FixtureEngineNewPayload.from_fixture_header(
             fork=self.fork,
             header=self.header,
@@ -591,6 +649,7 @@ class BuiltBlock(CamelModel):
             execution_payload_modifier=self.engine_payload_modifier(),
             validation_error=self.expected_exception,
             error_code=self.engine_api_error_code,
+            **kwargs,
         )
 
     def verify_transactions(
@@ -782,9 +841,12 @@ class BlockchainTest(BaseTest):
             and "blockchain_test_only" in marker_names
         ):
             return True
+        engine_formats: List[FixtureFormat] = [
+            BlockchainEngineFixture,
+            BlockchainEngineXFixture,
+        ]
         if (
-            fixture_format
-            not in [BlockchainEngineFixture, BlockchainEngineXFixture]
+            fixture_format not in engine_formats
             and "blockchain_test_engine_only" in marker_names
         ):
             return True
@@ -1131,6 +1193,178 @@ class BlockchainTest(BaseTest):
             print_traces(t8n.get_traces())
             raise e
 
+    def sync_block_policy(self) -> SyncBlockPolicy:
+        """
+        Resolve where this test's chain takes its sync block, from the
+        chain's statically declared structure.
+
+        The resolution reads only what every ``Block`` declares at
+        collection time - its expected exceptions and Engine API error
+        code - so phase 1 of the two-phase fill (which hashes the
+        genesis environment for pre-allocation grouping) and phase 2
+        (which builds the chain) always agree.
+
+        - **Append** when every block is valid and none is refused at
+          the Engine API: the appended block announces the chain and
+          makes all of the test's own blocks wire-guaranteed
+          ancestors.
+        - **Prepend** for a single expected-invalid block, and equally
+          for a single block whose ``engine_api_error_code`` expects
+          the announcement itself to be refused: nothing can be built
+          on either, and without a block below them no sync can start.
+          An error-code head must keep its announcement - a block
+          appended above it would announce the chain instead and the
+          refusal the test asserts would never happen.
+        - **None** otherwise: an invalid multi-block chain already
+          carries valid ancestors that travel the wire, and its head
+          is judged after they arrive; a multi-block chain with an
+          error-code block keeps its own announcement for the same
+          reason the singleton does; an empty chain has nothing to
+          announce.
+        """
+        if not self.sync_block or not self.blocks:
+            return SyncBlockPolicy.NONE
+        engine_refused = any(
+            block.engine_api_error_code is not None for block in self.blocks
+        )
+        invalid = any(block.exception is not None for block in self.blocks)
+        if len(self.blocks) == 1 and (invalid or engine_refused):
+            return SyncBlockPolicy.PREPEND
+        if not invalid and not engine_refused:
+            return SyncBlockPolicy.APPEND
+        return SyncBlockPolicy.NONE
+
+    def sync_block_extra_data(self) -> Bytes:
+        """
+        Return the sync block's ``extra_data``: a digest of the test's
+        salt, making the block's hash unique to this test (see
+        ``BaseTest.sync_block_salt``).
+        """
+        return Bytes(sha256(self.sync_block_salt.encode()).digest()[:16])
+
+    def blocks_to_build(self) -> List[Block]:
+        """
+        Return the chain's block list, honoring the resolved sync-block
+        policy.
+
+        Under the prepend policy, one empty block is inserted between
+        genesis and the test's single expected-invalid (or Engine
+        API-refused) block, so the announced head has an unknown
+        parent and sync-based consumers can trigger a devp2p sync
+        before the client judges it.
+
+        The prepended block's timestamp is pinned to one second after
+        genesis, below any timestamp a test is likely to pin. Its
+        ``extra_data`` carries the per-test salt digest (see
+        ``BaseTest.sync_block_salt``). A block that pins an absolute
+        ``number`` (state tests converted to blockchain tests always
+        do) is shifted up by one so the chain stays contiguous; a
+        deliberately wrong number stays wrong relative to the shifted
+        chain.
+
+        A pinned timestamp the prepended block's own timestamp does
+        not clear fails the fill loudly: timestamps are semantic (fork
+        activation, TIMESTAMP expectations), so they are never
+        shifted, and building the chain anyway would produce a
+        non-monotonic - consensus-invalid - sequence.
+
+        The appended sync block is deliberately *not* part of this
+        list: it is built on the chain's post-state after the test's
+        own blocks (and their post-state verification) are done, and
+        lives out-of-chain in the fixture's ``sync_payload`` field, so
+        the chain built here is byte-for-byte the author's.
+        """
+        if self.sync_block_policy() is not SyncBlockPolicy.PREPEND:
+            return self.blocks
+        genesis_timestamp = int(self.get_genesis_environment().timestamp)
+        self._verify_timestamps_clear_prepended_block(genesis_timestamp)
+        blocks: List[Block] = [
+            Block(
+                timestamp=HexNumber(genesis_timestamp + 1),
+                extra_data=self.sync_block_extra_data(),
+            )
+        ]
+        for block in self.blocks:
+            if block.number is not None:
+                block = block.model_copy(
+                    update={"number": HexNumber(block.number + 1)}
+                )
+            blocks.append(block)
+        return blocks
+
+    def _verify_timestamps_clear_prepended_block(
+        self, genesis_timestamp: int
+    ) -> None:
+        """
+        Refuse to prepend when a pinned timestamp cannot follow the
+        empty block.
+
+        The walk mirrors the block builder: an unpinned block gets its
+        parent's timestamp plus ``DEFAULT_TIMESTAMP_INCREMENT``, which
+        can never violate monotonicity, so only pinned timestamps can
+        collide. A block that declares a block exception is exempt - a
+        deliberately invalid timestamp stays invalid relative to the
+        shifted chain - and does not advance the walk, since an
+        invalid block is rolled back and its successor builds on the
+        previous head.
+
+        The prepend policy currently confines the walk to single-block
+        chains, where the check only ever fires for an Engine
+        API-refused block (an expected-invalid one is exempt). The
+        walk keeps its general form so it stays correct for any chain
+        the policy may hand it.
+        """
+        previous_timestamp = genesis_timestamp + 1
+        for index, block in enumerate(self.blocks):
+            if block.exception is not None:
+                continue
+            if block.timestamp is None:
+                previous_timestamp += DEFAULT_TIMESTAMP_INCREMENT
+                continue
+            pinned = int(block.timestamp)
+            if pinned <= previous_timestamp:
+                raise ValueError(
+                    f"the test's block {index + 1} pins timestamp "
+                    f"{pinned}, which does not clear its parent's "
+                    f"{previous_timestamp}: the chain would be "
+                    "non-monotonic and consensus-invalid. The prepended "
+                    "sync block occupies timestamp "
+                    f"{genesis_timestamp + 1} (genesis + 1) and every "
+                    "block above it must clear its own parent, so raise "
+                    "the pinned timestamps to leave the extra block "
+                    "room."
+                )
+            previous_timestamp = pinned
+
+    def _verify_sync_block_timestamp_headroom(
+        self, head_timestamp: int
+    ) -> None:
+        """
+        Refuse to append when the chain's head leaves the sync block
+        no room below the uint64 ceiling.
+
+        The appended block takes its parent's timestamp plus
+        ``DEFAULT_TIMESTAMP_INCREMENT``, and a block timestamp must
+        fit uint64: above a head pinned at or next to ``2**64 - 1``
+        the trailer's timestamp does not, and no client can even
+        parse the resulting payload. Nothing downstream notices
+        otherwise - Python integers do not overflow and t8n accepts
+        the value - so the fill refuses loudly instead of emitting an
+        unusable fixture. The mirror of the prepend side's
+        monotonicity walk: timestamps are semantic and are never
+        clamped or shifted.
+        """
+        sync_block_timestamp = head_timestamp + DEFAULT_TIMESTAMP_INCREMENT
+        if sync_block_timestamp > 2**64 - 1:
+            raise ValueError(
+                f"the chain's head pins timestamp {head_timestamp}, "
+                "leaving no uint64 headroom for the appended sync "
+                f"block: {head_timestamp} + "
+                f"{DEFAULT_TIMESTAMP_INCREMENT} exceeds 2**64 - 1, "
+                "and no client can parse a block whose timestamp "
+                "does not fit uint64."
+            )
+
     def make_fixture(
         self,
         t8n: FillerBackend,
@@ -1148,7 +1382,8 @@ class BlockchainTest(BaseTest):
         benchmark_gas_used: int | None = None
         benchmark_block_gas_used: int | None = None
         benchmark_opcode_count: OpcodeCount | None = None
-        for block in self.blocks:
+        blocks = self.blocks_to_build()
+        for index, block in enumerate(blocks):
             # This is the most common case, the RLP needs to be constructed
             # based on the transactions to be included in the block.
             # Set the environment according to the block to execute.
@@ -1159,7 +1394,7 @@ class BlockchainTest(BaseTest):
                 previous_alloc=alloc,
             )
             block_number = int(built_block.header.number)
-            is_last_block = block is self.blocks[-1]
+            is_last_block = index == len(blocks) - 1
             if is_last_block and self.operation_mode == OpMode.BENCHMARKING:
                 benchmark_gas_used = built_block.cumulative_gas_used()
                 benchmark_block_gas_used = built_block.block_gas_used()
@@ -1253,7 +1488,9 @@ class BlockchainTest(BaseTest):
         benchmark_gas_used: int | None = None
         benchmark_block_gas_used: int | None = None
         benchmark_opcode_count: OpcodeCount | None = None
-        for block in self.blocks:
+        sync_block_policy = self.sync_block_policy()
+        blocks = self.blocks_to_build()
+        for index, block in enumerate(blocks):
             built_block = self.generate_block_data(
                 t8n=t8n,
                 block=block,
@@ -1261,7 +1498,7 @@ class BlockchainTest(BaseTest):
                 previous_alloc=alloc,
             )
             block_number = int(built_block.header.number)
-            is_last_block = block is self.blocks[-1]
+            is_last_block = index == len(blocks) - 1
             if is_last_block and self.operation_mode == OpMode.BENCHMARKING:
                 benchmark_gas_used = built_block.cumulative_gas_used()
                 benchmark_block_gas_used = built_block.block_gas_used()
@@ -1272,7 +1509,15 @@ class BlockchainTest(BaseTest):
                     block_number=block_number,
                 )
             fixture_payloads.append(
-                built_block.get_fixture_engine_new_payload()
+                built_block.get_fixture_engine_new_payload(
+                    # The prepended sync block is always the first
+                    # block built; tag it so consumers can tell the
+                    # framework-injected payload from the test's own.
+                    phase=TestPhase.SYNC
+                    if sync_block_policy is SyncBlockPolicy.PREPEND
+                    and index == 0
+                    else None
+                )
             )
             if block.exception is None:
                 alloc = built_block.alloc
@@ -1333,6 +1578,30 @@ class BlockchainTest(BaseTest):
                     "pre_hash": "",  # Will be set by BaseTestWrapper
                 }
             )
+            if sync_block_policy is SyncBlockPolicy.APPEND:
+                assert env.parent_timestamp is not None
+                self._verify_sync_block_timestamp_headroom(
+                    int(env.parent_timestamp)
+                )
+                # Build the salted empty sync block on the test's
+                # post-state, after the post-state verification above,
+                # and keep it out of the payload list: the fixture's
+                # payloads, head and post state stay exactly the
+                # author's chain, and the appended block makes every
+                # one of them a wire-guaranteed ancestor (same
+                # representation as BlockchainEngineSyncFixture's
+                # sync_payload below).
+                sync_built_block = self.generate_block_data(
+                    t8n=t8n,
+                    block=Block(extra_data=self.sync_block_extra_data()),
+                    previous_env=env,
+                    previous_alloc=alloc,
+                )
+                fixture_data["sync_payload"] = (
+                    sync_built_block.get_fixture_engine_new_payload(
+                        phase=TestPhase.SYNC
+                    )
+                )
             fixture = BlockchainEngineXFixture(**fixture_data)
         elif fixture_format == BlockchainEngineSyncFixture:
             # Sync fixture format

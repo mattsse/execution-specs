@@ -341,6 +341,13 @@ class BenchmarkTest(BaseTest):
     include_full_post_state_in_output: bool = False
     include_tx_receipts_in_output: bool = False
 
+    supports_sync_block: ClassVar[bool] = False
+    """
+    Benchmark tests measure per-block gas and timing; a framework
+    block in the chain would distort those measurements, so the
+    filler's ``--sync-block`` option never applies to them.
+    """
+
     supported_fixture_formats: ClassVar[
         Sequence[FixtureFormat | LabeledFixtureFormat]
     ] = [
