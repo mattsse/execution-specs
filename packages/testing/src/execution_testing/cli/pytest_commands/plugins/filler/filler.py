@@ -90,6 +90,7 @@ from execution_testing.forks import (
 from execution_testing.specs import BaseTest
 from execution_testing.specs.base import FillResult, OpMode
 from execution_testing.specs.blockchain import (
+    APPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS,
     PREPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS,
 )
 from execution_testing.test_types import EnvironmentDefaults
@@ -122,6 +123,7 @@ if TYPE_CHECKING:
 
 SYNC_BLOCK_INELIGIBILITY_MARKERS: FrozenSet[str] = (
     PREPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS
+    | APPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS
 )
 """
 All sync-block ineligibility markers the filler collects from a test

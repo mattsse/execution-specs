@@ -542,3 +542,43 @@ def test_prepend_ineligibility_restores_the_author_genesis() -> None:
     env = test.get_genesis_environment()
     assert env.base_fee_per_gas == 10
     assert env.excess_blob_gas == 0x80000
+
+
+def test_append_ineligibility_marker_falls_back_bare() -> None:
+    """
+    A marked valid chain fills as exactly the author's chain: the
+    marker vetoes the append, and the test is never skipped.
+    """
+    test = BlockchainTest(
+        fork=Cancun,
+        pre=Alloc(),
+        post=Alloc(),
+        blocks=[VALID],
+        sync_block=True,
+        sync_block_salt="test",
+        sync_block_ineligibilities=frozenset(
+            {"post_state_affects_sync_block"}
+        ),
+    )
+    assert test.sync_block_policy() is SyncBlockPolicy.NONE
+    assert test.blocks_to_build() is test.blocks
+
+
+def test_append_ineligibility_marker_is_irrelevant_to_prepend() -> None:
+    """
+    The append-class marker on an invalid singleton changes nothing:
+    the prepended sync block never sees the test's post-state, so the
+    chain keeps its prepend.
+    """
+    test = BlockchainTest(
+        fork=Cancun,
+        pre=Alloc(),
+        post=Alloc(),
+        blocks=[INVALID],
+        sync_block=True,
+        sync_block_salt="test",
+        sync_block_ineligibilities=frozenset(
+            {"post_state_affects_sync_block"}
+        ),
+    )
+    assert test.sync_block_policy() is SyncBlockPolicy.PREPEND

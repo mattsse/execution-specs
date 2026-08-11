@@ -128,6 +128,20 @@ without the extra block (see
 to the appended sync block, which changes nothing below itself.
 """
 
+APPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS: FrozenSet[str] = frozenset(
+    {
+        "post_state_affects_sync_block",
+    }
+)
+"""
+Markers declaring a test permanently ineligible for the *appended*
+sync block: its final state breaks the extra block t8n would build on
+top of it (e.g. a sabotaged system contract every block calls, or
+one-shot state the block would consume). A marked test fills as
+exactly the author's chain - fallback bare, never skip. Irrelevant to
+the prepended sync block, which never sees the test's post-state.
+"""
+
 
 class SyncBlockPolicy(Enum):
     """
@@ -1459,6 +1473,11 @@ class BlockchainTest(BaseTest):
                 return SyncBlockPolicy.NONE
             return SyncBlockPolicy.PREPEND
         if not invalid and not engine_refused:
+            if (
+                self.sync_block_ineligibilities
+                & APPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS
+            ):
+                return SyncBlockPolicy.NONE
             return SyncBlockPolicy.APPEND
         return SyncBlockPolicy.NONE
 
@@ -1819,12 +1838,24 @@ class BlockchainTest(BaseTest):
                 # one of them a wire-guaranteed ancestor (same
                 # representation as BlockchainEngineSyncFixture's
                 # sync_payload below).
-                sync_built_block = self.generate_block_data(
-                    t8n=t8n,
-                    block=Block(extra_data=self.sync_block_extra_data()),
-                    previous_env=env,
-                    previous_alloc=alloc,
-                )
+                try:
+                    sync_built_block = self.generate_block_data(
+                        t8n=t8n,
+                        block=Block(extra_data=self.sync_block_extra_data()),
+                        previous_env=env,
+                        previous_alloc=alloc,
+                    )
+                except Exception as e:
+                    raise Exception(
+                        "the appended sync block could not be built on "
+                        "this test's post-state: the state the test "
+                        "ends with breaks the empty block's own "
+                        "execution (e.g. a sabotaged system contract "
+                        "or consumed one-shot state). If that state is "
+                        "the test's purpose, the test is ineligible "
+                        "for the appended sync block and belongs "
+                        "marked `post_state_affects_sync_block`."
+                    ) from e
                 fixture_data["sync_payload"] = (
                     sync_built_block.get_fixture_engine_new_payload(
                         phase=TestPhase.SYNC

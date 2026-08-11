@@ -4,12 +4,14 @@ Test the eligibility markers' interaction with the sync block.
 A prepend-class marker names a reason the prepended sync block cannot
 preserve what an invalid singleton verifies: the extra block shifts
 every position, executes the test's own setup, or cannot reproduce a
-pinned fee value. A marked test is not skipped - it fills without the
-extra block, so no test ever leaves the fixture release; sync-based
-consumers skip its single-block chain at consume time instead. The
-markers are irrelevant to valid chains: the appended sync block
-changes nothing below itself, so a marked valid test keeps its
-trailer.
+pinned fee value. The append-class marker names the one reason a
+valid chain cannot take its trailer: the test's final state breaks
+the empty block built on top of it. A marked test is not skipped -
+it fills without the extra block, so no test ever leaves the fixture
+release; sync-based consumers skip what cannot sync at consume time
+instead. Each marker vetoes only its own placement: a prepend-class
+marker is irrelevant to a valid chain's trailer, and the
+append-class marker is irrelevant to an invalid singleton's prepend.
 """
 
 import json
@@ -180,4 +182,60 @@ def test_marked_test_fills_without_the_sync_block(
     assert len(valid_payloads) == 1
     assert "syncPayload" in by_name["marked_valid"], (
         "a prepend-class marker must not cost a valid chain its trailer"
+    )
+
+
+append_marked_test_module = textwrap.dedent(
+    """\
+    import pytest
+
+    from execution_testing import Block, Transaction
+
+
+    @pytest.mark.post_state_affects_sync_block
+    def test_marked_valid(blockchain_test, pre) -> None:
+        tx = Transaction(
+            to=0,
+            gas_limit=21_000,
+            sender=pre.fund_eoa(),
+        )
+        blockchain_test(pre=pre, post={}, blocks=[Block(txs=[tx])])
+
+
+    def test_unmarked_valid(blockchain_test, pre) -> None:
+        tx = Transaction(
+            to=0,
+            gas_limit=21_000,
+            sender=pre.fund_eoa(),
+        )
+        blockchain_test(pre=pre, post={}, blocks=[Block(txs=[tx])])
+    """
+)
+
+
+def test_append_marked_test_fills_without_the_trailer(pytester: Any) -> None:
+    """
+    The append-class marker must cost exactly its own test the
+    trailer: the marked valid test fills as the author's bare chain
+    while the unmarked one in the same module keeps its
+    ``syncPayload``.
+    """
+    test_module = make_test_module(pytester, marker="unused")
+    test_module.write_text(append_marked_test_module)
+    output = fill(pytester, test_module)
+
+    fixtures = engine_x_fixtures(output)
+    by_name = {}
+    for test_id, fixture in fixtures.items():
+        for name in ("marked_valid", "unmarked_valid"):
+            if f"test_{name}[" in test_id:
+                by_name[name] = fixture
+    assert set(by_name) == {"marked_valid", "unmarked_valid"}
+
+    assert "syncPayload" not in by_name["marked_valid"], (
+        "the marked valid test must fill without the appended sync block"
+    )
+    assert len(by_name["marked_valid"]["engineNewPayloads"]) == 1
+    assert "syncPayload" in by_name["unmarked_valid"], (
+        "the unmarked valid test must keep its appended sync block"
     )

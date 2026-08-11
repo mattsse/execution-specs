@@ -271,6 +271,15 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "post_state_affects_sync_block: Marks a test whose final state "
+        "breaks the empty block the filler would append above its chain - "
+        "e.g. it ends with a sabotaged system contract that every "
+        "subsequent block calls, or one-shot state the extra block would "
+        "consume; a valid chain so marked fills without the appended sync "
+        "block, as exactly the author's chain.",
+    )
+    config.addinivalue_line(
+        "markers",
         "fixture_format_id: ID used to describe the fixture format.",
     )
     config.addinivalue_line(
