@@ -105,7 +105,6 @@ def fill(pytester: Any, test_module: Any) -> Path:
         "--fork",
         "Cancun",
         "--generate-all-formats",
-        "--sync-block",
         "--skip-index",
         "--no-html",
         f"--output={output}",

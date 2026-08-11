@@ -3,15 +3,16 @@ Test that the sync block reaches exactly the fixture formats that opt
 in, in the placement each chain class calls for.
 
 The sync block is scoped per fixture format: only
-``blockchain_test_engine_x`` declares ``sync_block`` true, so a fill
-with ``--sync-block`` must emit engine_x fixtures carrying the extra
-block - appended out-of-chain (the ``syncPayload`` field) for a valid
-chain, prepended in-chain (a leading payload tagged with the ``sync``
-phase) for an invalid singleton - while every other format's chains
-are byte-for-byte what the test defines. These tests fill single-block
-tests and read the fixtures back, so a sync block that leaks into the
-wrong format or placement, loses its phase tag, or fails to salt per
-test fails here rather than in a consumer.
+``blockchain_test_engine_x`` declares ``sync_block`` true, so a
+default fill must emit engine_x fixtures carrying the extra block -
+appended out-of-chain (the ``syncPayload`` field) for a valid chain,
+prepended in-chain (a leading payload tagged with the ``sync`` phase)
+for an invalid singleton - while every other format's chains are
+byte-for-byte what the test defines, and ``--no-sync-block`` must
+restore every chain as written. These tests fill single-block tests
+and read the fixtures back, so a sync block that leaks into the wrong
+format or placement, loses its phase tag, or fails to salt per test
+fails here rather than in a consumer.
 """
 
 import json
@@ -151,7 +152,7 @@ def test_valid_chain_appends_out_of_chain(pytester: Any) -> None:
     test_module = make_test_module(
         pytester, valid_test_module, "test_single_block.py"
     )
-    output = fill(pytester, test_module, "--sync-block")
+    output = fill(pytester, test_module)
 
     for fixture in fixtures_of_format(output, "blockchain_tests").values():
         assert len(fixture["blocks"]) == 1
@@ -203,7 +204,7 @@ def test_appended_sync_block_is_salted_per_test(pytester: Any) -> None:
     test_module = make_test_module(
         pytester, valid_test_module, "test_single_block.py"
     )
-    output = fill(pytester, test_module, "--sync-block")
+    output = fill(pytester, test_module)
 
     salted = {
         fixture["syncPayload"]["params"][0]["extraData"]
@@ -224,7 +225,7 @@ def test_invalid_singleton_prepends_in_chain(pytester: Any) -> None:
     test_module = make_test_module(
         pytester, invalid_singleton_module, "test_invalid_singleton.py"
     )
-    output = fill(pytester, test_module, "--sync-block")
+    output = fill(pytester, test_module)
 
     for fixture in fixtures_of_format(output, "blockchain_tests").values():
         assert len(fixture["blocks"]) == 1
@@ -256,12 +257,12 @@ def test_invalid_singleton_prepends_in_chain(pytester: Any) -> None:
         )
 
 
-def test_sync_block_is_off_by_default(pytester: Any) -> None:
-    """Without the option no format gains a sync block."""
+def test_no_sync_block_disables_the_sync_block(pytester: Any) -> None:
+    """With the opt-out no format gains a sync block."""
     test_module = make_test_module(
         pytester, valid_test_module, "test_single_block.py"
     )
-    output = fill(pytester, test_module)
+    output = fill(pytester, test_module, "--no-sync-block")
 
     for fixture in fixtures_of_format(output, "blockchain_tests").values():
         assert len(fixture["blocks"]) == 1

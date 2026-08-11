@@ -651,7 +651,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--sync-block",
         action="store_true",
         dest="sync_block",
-        default=False,
+        default=True,
         help=(
             "Add one framework-built empty block to every blockchain "
             "test's chain for fixture formats that opt in "
@@ -664,10 +664,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "single expected-invalid or Engine API-refused block "
             "(stored in-chain as the first payload, tagged with the "
             "`sync` phase), and omitted otherwise. Spec types that "
-            "opt out (benchmark tests) are filled without it. "
-            "Prepending shifts the invalid singleton's number and "
-            "hash, so those fixtures are not comparable with fixtures "
-            "filled without the option."
+            "opt out (benchmark tests) are filled without it. On by "
+            "default; --no-sync-block disables it. Prepending shifts "
+            "the invalid singleton's number and hash, so those "
+            "fixtures are not comparable with fixtures filled "
+            "without the option."
         ),
     )
     test_group.addoption(
