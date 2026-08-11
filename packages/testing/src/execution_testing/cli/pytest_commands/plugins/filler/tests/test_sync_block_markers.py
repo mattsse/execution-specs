@@ -133,6 +133,7 @@ def engine_x_fixtures(output: Path) -> Dict[str, Dict[str, Any]]:
     "marker",
     [
         "absolute_block_position",
+        "no_empty_block_fee_preimage",
         "pre_state_affects_empty_block",
     ],
 )

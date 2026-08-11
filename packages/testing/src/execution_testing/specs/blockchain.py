@@ -115,6 +115,7 @@ timestamp of its own (see ``Block.set_environment``).
 PREPEND_SYNC_BLOCK_INELIGIBILITY_MARKERS: FrozenSet[str] = frozenset(
     {
         "absolute_block_position",
+        "no_empty_block_fee_preimage",
         "pre_state_affects_empty_block",
     }
 )
@@ -233,7 +234,9 @@ def empty_block_base_fee_preimage(
     raise ValueError(
         f"no parent base fee decays to {base_fee_per_gas} on an empty "
         f"block at fork {fork.name()}; the prepended sync block cannot "
-        "preserve this test's fee environment"
+        "preserve this test's fee environment, so the test is "
+        "ineligible for the prepend and belongs marked "
+        "`no_empty_block_fee_preimage`"
     )
 
 
@@ -254,8 +257,8 @@ def empty_block_excess_blob_gas_preimage(
 
     Some values are unreachable: under a fee floor the decay is skipped
     while the floor holds, so a small nonzero excess has no parent at
-    all. Such a test cannot take the prepended sync block and its fill
-    is refused loudly.
+    all. Such a test is ineligible for the prepended sync block and is
+    marked ``no_empty_block_fee_preimage`` rather than filled.
     """
     calculate_excess_blob_gas = fork.excess_blob_gas_calculator()
     target = fork.target_blobs_per_block() * fork.blob_gas_per_blob()
@@ -270,7 +273,9 @@ def empty_block_excess_blob_gas_preimage(
     raise ValueError(
         f"no parent excess blob gas decays to {excess_blob_gas} on an "
         f"empty block at fork {fork.name()}; the prepended sync block "
-        "cannot preserve this test's fee environment"
+        "cannot preserve this test's fee environment, so the test is "
+        "ineligible for the prepend and belongs marked "
+        "`no_empty_block_fee_preimage`"
     )
 
 
